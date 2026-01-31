@@ -1,53 +1,228 @@
-import { Link } from 'react-router-dom';
-import { useCart } from '../context/CartContext.jsx';
+import { Link } from "react-router-dom";
+import { useState } from "react";
+import { useCart } from "../context/CartContext.jsx";
+import api from "../AxiosConfig";
+import AuthService from "../services/AuthService";
 
 function formatCLP(n) {
-  return new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP' }).format(n);
+  const num = Number(n) || 0;
+  return new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP" }).format(num);
 }
 
-function getUserDiscount() {
+function getJwtUser() {
   try {
-    const raw = localStorage.getItem('lug_user');
-    if (!raw) return 0;
-
-    const user = JSON.parse(raw);
-
-    // Preferimos el campo guardado en registro
-    if (typeof user.descuentoDuoc === 'number') return user.descuentoDuoc;
-
-    // Fallback por si no lo guardaste: detectamos por email
-    const email = String(user.email || '').toLowerCase().trim();
-    if (email.endsWith('@duoc.cl') || email.endsWith('@duocuc.cl')) return 0.2;
-
-    return 0;
+    const raw = localStorage.getItem("user");
+    if (!raw) return null;
+    return JSON.parse(raw);
   } catch {
-    return 0;
+    return null;
   }
+}
+
+function getUserDiscountRate() {
+  const user = getJwtUser();
+  if (!user) return 0;
+
+  const email = String(user.email || "").toLowerCase().trim();
+  const esDuoc = email.endsWith("@duoc.cl") || email.endsWith("@duocuc.cl");
+  return esDuoc ? 0.2 : 0;
+}
+
+
+const isNumeric = (v) => /^\d+$/.test(String(v));
+
+const normName = (s) =>
+  String(s || "")
+    .toLowerCase()
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ");
+
+async function resolveProductoId(item, apiProductsCache) {
+ 
+  if (isNumeric(item.id)) return Number(item.id);
+
+  
+  const targetName = normName(item.nombre);
+
+
+  if (!apiProductsCache.list) {
+    const res = await api.get("/productos"); // público
+    apiProductsCache.list = Array.isArray(res.data) ? res.data : [];
+  }
+
+  const found = apiProductsCache.list.find((p) => normName(p.nombre) === targetName);
+
+  if (!found) return null;
+  return Number(found.id);
 }
 
 export default function Cart() {
   const { cartItems, removeFromCart, setQty, clearCart, total } = useCart();
+  const [boletaUI, setBoletaUI] = useState(null); // ✅ aquí guardamos la boleta creada
 
-  const discountRate = getUserDiscount(); // 0 o 0.2
+  const user = getJwtUser();
+  const discountRate = getUserDiscountRate();
   const discountAmount = Math.round(total * discountRate);
   const finalTotal = Math.max(0, total - discountAmount);
 
+  const finalizarCompra = async () => {
+    const current = AuthService.getCurrentUser();
+
+    if (!current) {
+      alert("Debes iniciar sesión para comprar.");
+      return;
+    }
+    if (current.rol !== "CLIENTE") {
+      alert("Solo los CLIENTES pueden comprar.");
+      return;
+    }
+    if (!cartItems || cartItems.length === 0) {
+      alert("Tu carrito está vacío.");
+      return;
+    }
+
+    const apiProductsCache = { list: null };
+
+    try {
+      const items = [];
+
+      for (const it of cartItems) {
+        const cantidad = Number(it.qty);
+        if (!Number.isInteger(cantidad) || cantidad <= 0) {
+          alert(`Cantidad inválida en: ${it.nombre}`);
+          return;
+        }
+
+        const producto_id = await resolveProductoId(it, apiProductsCache);
+        if (!producto_id || !Number.isInteger(producto_id) || producto_id <= 0) {
+          alert(
+            `❌ El producto "${it.nombre}" no existe en la BD/API.\n\n` +
+              `Crea ese producto en Inventario (Admin) con el mismo nombre o elimínalo del carrito.`
+          );
+          return;
+        }
+
+        items.push({ producto_id, cantidad });
+      }
+
+      const res = await api.post("/boletas", { items });
+
+      setBoletaUI(res.data);
+      clearCart();
+    } catch (e) {
+      console.log(e);
+      alert(e?.response?.data?.message || "Error creando boleta");
+    }
+  };
+
   return (
     <div className="container py-5 text-white">
-      <h2 className="text-success mb-4" style={{ fontFamily: 'Orbitron, sans-serif' }}>
+      <h2 className="text-success mb-4" style={{ fontFamily: "Orbitron, sans-serif" }}>
         Carrito de compras
       </h2>
 
+     
+      {boletaUI && (
+        <div className="mb-4">
+          <div className="card p-4 shadow-lg">
+            <div className="d-flex justify-content-between align-items-center flex-wrap gap-2">
+              <div>
+                <h4 className="mb-1">Boleta #{boletaUI.boleta?.id}</h4>
+                <div className="text-muted">
+                  Fecha:{" "}
+                  {boletaUI.boleta?.fecha
+                    ? new Date(boletaUI.boleta.fecha).toLocaleString()
+                    : "—"}
+                </div>
+                <div className="text-muted">
+                  Cliente: {boletaUI.cliente_email || user?.email || "—"}
+                </div>
+              </div>
+
+              <div className="d-flex gap-2">
+                <button className="btn btn-outline-secondary" onClick={() => window.print()}>
+                  Imprimir
+                </button>
+                <button className="btn btn-danger" onClick={() => setBoletaUI(null)}>
+                  Cerrar
+                </button>
+              </div>
+            </div>
+
+            <hr />
+
+            <div className="table-responsive">
+              <table className="table table-bordered align-middle">
+                <thead className="table-light">
+                  <tr>
+                    <th>#</th>
+                    <th>Producto</th>
+                    <th>Cantidad</th>
+                    <th>Precio unitario</th>
+                    <th>Subtotal</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(boletaUI.detalles || []).map((d, idx) => (
+                    <tr key={d.id ?? idx}>
+                      <td>{idx + 1}</td>
+                      <td>
+                        {d.producto_nombre}{" "}
+                        <span className="text-muted">(#{d.producto_id})</span>
+                      </td>
+                      <td>{d.cantidad}</td>
+                      <td>{formatCLP(d.precio_unitario)}</td>
+                      <td className="fw-bold">{formatCLP(d.subtotal)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="d-flex justify-content-end">
+              <div style={{ minWidth: 320 }}>
+                <div className="d-flex justify-content-between">
+                  <span>Total boleta (BD)</span>
+                  <strong>{formatCLP(boletaUI.boleta?.total)}</strong>
+                </div>
+
+                <div className="d-flex justify-content-between mt-1">
+                  <span>Descuento DUOC (frontend)</span>
+                  <strong className={discountRate > 0 ? "text-success" : "text-muted"}>
+                    {discountRate > 0 ? `- ${formatCLP(discountAmount)} (20%)` : formatCLP(0)}
+                  </strong>
+                </div>
+
+                <hr className="my-2" />
+
+                
+                <div className="d-flex justify-content-between fs-5">
+                  <span>Total a pagar</span>
+                  <strong className="text-primary">{formatCLP(boletaUI.boleta?.total)}</strong>
+                </div>
+
+                {discountRate > 0 && (
+                  <div className="alert alert-success mt-3 py-2 mb-0">
+                    🎉 Descuento DUOC aplicado (20%).
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {cartItems.length === 0 ? (
         <div className="alert alert-info">
-          Tu carrito está vacío.{' '}
+          Tu carrito está vacío.{" "}
           <Link to="/" className="alert-link">
             Ir a productos
           </Link>
         </div>
       ) : (
         <>
-          {/* Tabla */}
           <div className="table-responsive">
             <table className="table table-dark table-hover align-middle">
               <thead>
@@ -62,17 +237,17 @@ export default function Cart() {
 
               <tbody>
                 {cartItems.map((item) => {
-                  const precioNum = Number(String(item.precio).replace(/[^0-9]/g, '') || 0);
+                  const precioNum = Number(String(item.precio).replace(/[^0-9]/g, "") || 0);
                   const subtotal = precioNum * item.qty;
 
                   return (
-                    <tr key={item.id}>
+                    <tr key={`${item.id}-${item.nombre}`}>
                       <td>
                         <div className="d-flex gap-3 align-items-center">
                           <img
                             src={item.imagen}
                             alt={item.nombre}
-                            style={{ width: 60, height: 60, objectFit: 'contain' }}
+                            style={{ width: 60, height: 60, objectFit: "contain" }}
                           />
                           <div>
                             <div className="fw-bold">{item.nombre}</div>
@@ -119,7 +294,6 @@ export default function Cart() {
             </table>
           </div>
 
-          {/* Resumen */}
           <div className="row mt-4 g-3">
             <div className="col-md-7">
               <button className="btn btn-outline-warning" onClick={clearCart}>
@@ -138,7 +312,7 @@ export default function Cart() {
 
                 <div className="d-flex justify-content-between text-dark mt-2">
                   <span>Descuento DUOC</span>
-                  <strong className={discountRate > 0 ? 'text-success' : 'text-muted'}>
+                  <strong className={discountRate > 0 ? "text-success" : "text-muted"}>
                     {discountRate > 0 ? `- ${formatCLP(discountAmount)} (20%)` : formatCLP(0)}
                   </strong>
                 </div>
@@ -150,17 +324,7 @@ export default function Cart() {
                   <strong className="text-primary">{formatCLP(finalTotal)}</strong>
                 </div>
 
-                {discountRate > 0 ? (
-                  <div className="alert alert-success mt-3 py-2 mb-0">
-                    🎉 Descuento DUOC aplicado de por vida (20%).
-                  </div>
-                ) : (
-                  <div className="alert alert-info mt-3 py-2 mb-0">
-                    Tip: regístrate con correo DUOC para obtener 20% de por vida.
-                  </div>
-                )}
-
-                <button className="btn btn-success fw-bold mt-3 px-4">
+                <button className="btn btn-success fw-bold mt-3 px-4" onClick={finalizarCompra}>
                   Finalizar compra
                 </button>
               </div>

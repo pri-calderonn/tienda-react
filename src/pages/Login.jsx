@@ -1,70 +1,63 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import AuthService from "../services/AuthService";
 
 export default function Login() {
   const navigate = useNavigate();
-  const [form, setForm] = useState({ email: '', password: '' });
-  const [error, setError] = useState('');
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
 
-  const handleChange = (e) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
-    setError('');
-  };
-
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    setError("");
 
-    const saved = localStorage.getItem('lug_user');
-    if (!saved) {
-      setError('No hay usuario registrado. Crea una cuenta primero.');
-      return;
+    try {
+      const data = await AuthService.login(email, password);
+      const rol = data?.user?.rol;
+
+      if (rol === "ADMIN" || rol === "VENDEDOR") {
+        navigate("/productos");
+      } else {
+        navigate("/");
+      }
+    } catch (err) {
+      setError("Credenciales inválidas");
     }
-
-    const user = JSON.parse(saved);
-
-    if (user.email === form.email.trim().toLowerCase() && user.password === form.password) {
-      localStorage.setItem('lug_session', 'true');
-      navigate('/');
-      return;
-    }
-
-    setError('Correo o contraseña incorrectos.');
   };
 
   return (
     <div className="container py-5 text-white" style={{ maxWidth: 520 }}>
-      <h2 className="text-success mb-3" style={{ fontFamily: 'Orbitron, sans-serif' }}>
-        Iniciar Sesión
-      </h2>
+      <h2 className="text-success mb-3">Iniciar Sesión</h2>
 
       {error && <div className="alert alert-danger">{error}</div>}
 
       <form onSubmit={handleSubmit} className="p-4 border border-primary rounded bg-dark">
-        <div className="mb-3 text-start">
-          <label className="form-label">Email</label>
+        <div className="mb-3">
+          <label htmlFor="login-email">Email</label>
           <input
+            id="login-email"
             type="email"
-            name="email"
-            className="form-control bg-secondary text-white border-0"
-            value={form.email}
-            onChange={handleChange}
+            className="form-control bg-secondary text-white"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
             required
           />
         </div>
 
-        <div className="mb-3 text-start">
-          <label className="form-label">Contraseña</label>
+        <div className="mb-3">
+          <label htmlFor="login-password">Contraseña</label>
           <input
+            id="login-password"
             type="password"
-            name="password"
-            className="form-control bg-secondary text-white border-0"
-            value={form.password}
-            onChange={handleChange}
+            className="form-control bg-secondary text-white"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
             required
           />
         </div>
 
-        <button className="btn btn-primary w-100 fw-bold">ENTRAR</button>
+        <button className="btn btn-success w-100 fw-bold">ENTRAR</button>
       </form>
     </div>
   );

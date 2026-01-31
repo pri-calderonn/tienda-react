@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import api from "../AxiosConfig"; 
 
 const CartContext = createContext(null);
 const CART_KEY = 'lug_cart';
@@ -57,6 +58,31 @@ export function CartProvider({ children }) {
     return cartItems.reduce((acc, i) => acc + toNumber(i.precio) * i.qty, 0);
   }, [cartItems]);
 
+  // 2. FUNCIÓN DE COMPRA (Conectada al Backend)
+  const checkout = async () => {
+    if (cartItems.length === 0) return alert("El carrito está vacío");
+
+    try {
+      const response = await api.post("/comprar", {
+        total: total,
+        items: cartItems.map(i => ({
+          producto_id: i.id,
+          cantidad: i.qty,
+          precio: i.precio
+        }))
+      });
+      
+      if (response.status === 200 || response.status === 201) {
+        clearCart();
+        alert("¡Compra realizada con éxito! Revisa tu perfil.");
+      }
+    } catch (error) {
+      console.error("Error al finalizar compra", error);
+      alert("Error: Debes iniciar sesión como CLIENTE para comprar.");
+    }
+  };
+
+ 
   const value = {
     cartItems,
     addToCart,
@@ -65,6 +91,7 @@ export function CartProvider({ children }) {
     clearCart,
     itemsCount,
     total,
+    checkout, 
   };
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;
